@@ -2,8 +2,7 @@ blueprint:
   name: Bewegung/Tür Aktivierter Schalter
   description: V0.1.2  Schaltet einen Schalter ein, wenn Bewegung erkannt oder eine Tür geöffnet wird, und hält ihn für eine bestimmte Dauer nach Beendigung der Aktivität eingeschaltet.
   domain: automation
-  source_url: https://github.com/Mineralwasse/hass_motion_door_activated_switch
-  version: '0.1'
+  source_url: https://github.com/Mineralwasse/Motion-Activated-Light/blob/main/motion_door_activated_switch.yaml
   input:
     motion_sensors:
       name: Bewegungssensoren

@@ -1,0 +1,124 @@
+blueprint:
+  name: Bewegung/Tür Aktivierter Schalter
+  description: V0.1.2  Schaltet einen Schalter ein, wenn Bewegung erkannt oder eine Tür geöffnet wird, und hält ihn für eine bestimmte Dauer nach Beendigung der Aktivität eingeschaltet.
+  domain: automation
+  source_url: https://github.com/Mineralwasse/hass_motion_door_activated_switch
+  version: '0.1'
+  input:
+    motion_sensors:
+      name: Bewegungssensoren
+      description: Wählen Sie einen oder mehrere Bewegungssensoren aus. (Es werden alle binären Sensoren angezeigt, wählen Sie die Bewegungssensoren aus.)
+      selector:
+        entity:
+          domain: binary_sensor
+          multiple: true
+    door_contacts:
+      name: Türkontakte
+      description: Wählen Sie einen oder mehrere Tür-/Fensterkontakte aus. (Es werden alle binären Sensoren angezeigt, wählen Sie die Türkontakte aus.)
+      selector:
+        entity:
+          domain: binary_sensor
+          multiple: true
+    target_switch:
+      name: Zielschalter/Licht
+      description: Der zu steuernde Schalter oder das Licht.
+      selector:
+        entity:
+          domain: [switch, light]
+    delay_off:
+      name: Ausschaltverzögerung
+      description: Zeit, die gewartet werden soll, bevor der Schalter ausgeschaltet wird, nachdem alle Aktivitäten beendet wurden (z.B. "00:05:00" für 5 Minuten).
+      default: "00:05:00"
+      selector:
+        duration:
+    max_on_duration:
+      name: Maximale Einschaltdauer
+      description: Maximale Zeit, die der Schalter eingeschaltet bleiben darf, unabhängig von der Aktivität der Sensoren. Setzen Sie auf "00:00:00", um diese Funktion zu deaktivieren (z.B. "01:00:00" für 1 Stunde).
+      default: "00:00:00"
+      selector:
+        duration:
+    check_motion_sensors_on_max_on:
+      name: Berücksichtige Bewegungssensoren bei maximaler Einschaltdauer
+      description: Wenn aktiviert, wird der Schalter nicht ausgeschaltet, wenn ein Bewegungssensor aktiv ist, auch wenn die maximale Einschaltdauer erreicht ist.
+      selector:
+        boolean:
+      default: true
+    check_door_sensors_on_max_on:
+      name: Berücksichtige Türkontakte bei maximaler Einschaltdauer
+      description: Wenn aktiviert, wird der Schalter nicht ausgeschaltet, wenn ein Türkontakt aktiv ist, auch wenn die maximale Einschaltdauer erreicht ist.
+      selector:
+        boolean:
+      default: true
+
+trigger:
+  # Auslöser, wenn ein Bewegungssensor EINGESCHALTET wird
+  - platform: state
+    entity_id: !input motion_sensors
+    to: "on"
+  # Auslöser, wenn ein Türkontakt EINGESCHALTET wird (z.B. Tür öffnet sich)
+  - platform: state
+    entity_id: !input door_contacts
+    to: "on"
+  # Auslöser, wenn ein Bewegungssensor AUSGESCHALTET wird und für die angegebene Verzögerung AUSGESCHALTET bleibt
+  - platform: state
+    entity_id: !input motion_sensors
+    to: "off"
+    for: !input delay_off
+  # Auslöser, wenn ein Türkontakt AUSGESCHALTET wird und für die angegebene Verzögerung AUSGESCHALTET bleibt
+  - platform: state
+    entity_id: !input door_contacts
+    to: "off"
+    for: !input delay_off
+  # Auslöser, wenn der Zielschalter für die maximale Einschaltdauer EINGESCHALTET bleibt (optional, wird in der Aktion geprüft)!
+  - platform: state
+    entity_id: !input target_switch
+    to: "on"
+    for: !input max_on_duration
+
+action:
+  - variables:
+      motion_entities: !input motion_sensors
+      door_entities: !input door_contacts
+      target_switch: !input target_switch
+      max_on_duration: !input max_on_duration
+      check_motion: !input check_motion_sensors_on_max_on
+      check_door: !input check_door_sensors_on_max_on
+      # Prüfen, ob einer der ausgewählten Bewegungssensoren oder Türkontakte derzeit 'on' ist
+      any_sensor_on: >
+        {{ expand(motion_entities if motion_entities is not none else [], door_entities if door_entities is not none else []) | selectattr('state', 'eq', 'on') | list | count > 0 }}
+      is_override_active: >
+        {% set motion_to_check = motion_entities if check_motion and motion_entities is not none else [] %}
+        {% set door_to_check = door_entities if check_door and door_entities is not none else [] %}
+        {{ expand(motion_to_check, door_to_check) | selectattr('state', 'eq', 'on') | list | count > 0 }}
+  - choose:
+      # Option 1: Wenn der Schalter aufgrund der maximalen Einschaltdauer ausgelöst wurde, schalten Sie ihn aus.
+      - conditions:
+          - condition: template
+            value_template: >
+              {{ trigger.platform == 'state' and trigger.entity_id == target_switch and trigger.to_state.state == 'on' and trigger.for is not none and max_on_duration != '00:00:00' }}
+          - condition: template
+            value_template: "{{ not is_override_active }}"
+        sequence:
+          - service: homeassistant.turn_off
+            target:
+              entity_id: "{{ target_switch }}"
+      # Option 2: Wenn ein Sensor derzeit 'on' ist, schalten Sie den Zielschalter ein.
+      # Dies handhabt die anfängliche Aktivierung und hält den Schalter eingeschaltet, wenn die Aktivität fortgesetzt wird.
+      - conditions: "{{ any_sensor_on }}"
+        sequence:
+          - service: homeassistant.turn_on
+            target:
+              entity_id: "{{ target_switch }}"
+      # Option 3: Wenn kein Sensor derzeit 'on' ist UND die Automatisierung durch einen Sensor ausgelöst wurde,
+      # der 'off' ging und für die 'delay_off'-Periode 'off' blieb, dann schalten Sie den Schalter aus.
+      - conditions:
+          - condition: template
+            value_template: "{{ not any_sensor_on }}"
+          - condition: template
+            value_template: >
+              {{ trigger.platform == 'state' and trigger.to_state.state == 'off' and trigger.for is not none }}
+        sequence:
+          - service: homeassistant.turn_off
+            target:
+              entity_id: "{{ target_switch }}"
+mode: restart # Stellt sicher, dass, wenn ein Sensor wieder aktiv wird, die Automatisierung neu startet und eine ausstehende 'off'-Aktion abbricht.
